@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NBIS Live</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #131722;
+      color: #d1d4dc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px;
+    }
+
+    header {
+      width: 100%;
+      max-width: 900px;
+      margin-bottom: 24px;
+    }
+
+    .ticker-row {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .ticker-symbol {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #9598a1;
+      letter-spacing: 0.08em;
+    }
+
+    .ticker-price {
+      font-size: 2.6rem;
+      font-weight: 700;
+      color: #d1d4dc;
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .ticker-change {
+      font-size: 1.1rem;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .ticker-change.up   { color: #26a69a; }
+    .ticker-change.down { color: #ef5350; }
+    .ticker-change.flat { color: #9598a1; }
+
+    .status-bar {
+      margin-top: 6px;
+      font-size: 0.78rem;
+      color: #9598a1;
+      min-height: 1.2em;
+    }
+    .status-bar .warn { color: #f0a500; }
+    .status-bar .closed { color: #9598a1; }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .tf-btn {
+      background: #1e222d;
+      border: 1px solid #2a2e39;
+      color: #9598a1;
+      border-radius: 6px;
+      padding: 6px 18px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .tf-btn:hover   { background: #2a2e39; color: #d1d4dc; }
+    .tf-btn.active  { background: #2962ff22; border-color: #2962ff; color: #2979ff; font-weight: 600; }
+
+    .chart-wrap {
+      width: 100%;
+      max-width: 900px;
+      background: #1e222d;
+      border-radius: 12px;
+      padding: 20px;
+      border: 1px solid #2a2e39;
+    }
+
+    canvas { display: block; }
+
+    .loading-overlay {
+      text-align: center;
+      color: #9598a1;
+      font-size: 0.9rem;
+      padding: 48px 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="ticker-row">
+    <span class="ticker-symbol">NBIS &bull; NASDAQ</span>
+    <span class="ticker-price" id="price">—</span>
+    <span class="ticker-change flat" id="change">—</span>
+  </div>
+  <div class="status-bar" id="status"></div>
+  <div class="controls">
+    <button class="tf-btn active" data-tf="1D">1D</button>
+    <button class="tf-btn" data-tf="1W">1W</button>
+    <button class="tf-btn" data-tf="1M">1M</button>
+    <button class="tf-btn" data-tf="1Y">1Y</button>
+  </div>
+</header>
+
+<div class="chart-wrap">
+  <div class="loading-overlay" id="loading">Loading chart data…</div>
+  <canvas id="chart" style="display:none;"></canvas>
+</div>
+
+<script>
+  // ── State ────────────────────────────────────────────────────────────────
+  let currentTF = "1D";
+  let chart = null;
+  let livePrice = null;
+  let marketOpen = false;
+
+  // ── Chart setup ──────────────────────────────────────────────────────────
+  function buildChart(labels, prices, color) {
+    const ctx = document.getElementById("chart").getContext("2d");
+    if (chart) { chart.destroy(); chart = null; }
+
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("chart").style.display = "block";
+
+    chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: prices,
+          borderColor: color,
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.1,
+          fill: {
+            target: "origin",
+            above: color + "18",
+          },
+        }],
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "#1e222d",
+            borderColor: "#2a2e39",
+            borderWidth: 1,
+            titleColor: "#9598a1",
+            bodyColor: "#d1d4dc",
+            callbacks: {
+              label: ctx => "$" + ctx.parsed.y.toFixed(2),
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: "#9598a1",
+              maxTicksLimit: 8,
+              maxRotation: 0,
+              font: { size: 11 },
+              callback: function(val, idx) {
+                const raw = this.getLabelForValue(val);
+                try {
+                  const d = new Date(raw);
+                  if (isNaN(d)) return raw;
+                  if (currentTF === "1D") return d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+                  if (currentTF === "1Y") return d.toLocaleDateString([], {month: "short", day: "numeric"});
+                  return d.toLocaleDateString([], {month: "short", day: "numeric"});
+                } catch { return raw; }
+              },
+            },
+            grid: { color: "#2a2e39" },
+          },
+          y: {
+            position: "right",
+            ticks: {
+              color: "#9598a1",
+              font: { size: 11 },
+              callback: val => "$" + val.toFixed(2),
+            },
+            grid: { color: "#2a2e39" },
+          },
+        },
+      },
+    });
+  }
+
+  function chartColor(prices) {
+    if (!prices || prices.length < 2) return "#2979ff";
+    return prices[prices.length - 1] >= prices[0] ? "#26a69a" : "#ef5350";
+  }
+
+  // ── History fetch ────────────────────────────────────────────────────────
+  async function loadHistory(tf) {
+    document.getElementById("loading").style.display = "block";
+    document.getElementById("chart").style.display = "none";
+
+    try {
+      const res = await fetch("/api/history?timeframe=" + tf);
+      const data = await res.json();
+
+      if (!data.labels || data.labels.length === 0) {
+        document.getElementById("loading").textContent =
+          "Market Closed — Last Close: $" + (data.last_close ? data.last_close.toFixed(2) : "N/A");
+        return;
+      }
+
+      buildChart(data.labels, data.prices, chartColor(data.prices));
+    } catch (e) {
+      document.getElementById("loading").textContent = "Failed to load chart data.";
+    }
+  }
+
+  // ── Timeframe buttons ────────────────────────────────────────────────────
+  document.querySelectorAll(".tf-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tf-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentTF = btn.dataset.tf;
+      loadHistory(currentTF);
+    });
+  });
+
+  // ── Price ticker update ──────────────────────────────────────────────────
+  function updateTicker(data) {
+    const priceEl  = document.getElementById("price");
+    const changeEl = document.getElementById("change");
+    const statusEl = document.getElementById("status");
+
+    livePrice  = data.price;
+    marketOpen = data.market_open;
+
+    if (data.price != null) {
+      priceEl.textContent = "$" + data.price.toFixed(2);
+    }
+
+    if (data.change != null && data.change_pct != null) {
+      const sign = data.change >= 0 ? "+" : "";
+      changeEl.textContent = sign + data.change.toFixed(2) + " (" + sign + data.change_pct.toFixed(2) + "%)";
+      changeEl.className = "ticker-change " + (data.change > 0 ? "up" : data.change < 0 ? "down" : "flat");
+    }
+
+    let statusParts = [];
+    if (!data.market_open) {
+      const lastClose = data.prev_close != null ? "$" + data.prev_close.toFixed(2) : "N/A";
+      statusParts.push('<span class="closed">Market Closed — Last Close: ' + lastClose + '</span>');
+    }
+    if (data.stale) {
+      statusParts.push('<span class="warn">Data may be delayed</span>');
+    }
+    if (data.timestamp) {
+      const t = new Date(data.timestamp).toLocaleTimeString();
+      statusParts.push("Updated " + t);
+    }
+    statusEl.innerHTML = statusParts.join(" &nbsp;·&nbsp; ");
+
+    // Append live point to 1D chart
+    if (currentTF === "1D" && chart && data.market_open && data.price != null) {
+      const ds = chart.data.datasets[0];
+      const now = new Date().toISOString();
+      chart.data.labels.push(now);
+      ds.data.push(data.price);
+      // Keep last 500 points to avoid memory growth
+      if (chart.data.labels.length > 500) {
+        chart.data.labels.shift();
+        ds.data.shift();
+      }
+      ds.borderColor = chartColor(ds.data);
+      chart.options.scales.y.ticks.callback = val => "$" + val.toFixed(2);
+      chart.update("none");
+    }
+  }
+
+  // ── SSE ──────────────────────────────────────────────────────────────────
+  function connectSSE() {
+    const es = new EventSource("/api/stream");
+    es.onmessage = e => {
+      try { updateTicker(JSON.parse(e.data)); } catch {}
+    };
+    es.onerror = () => {
+      es.close();
+      setTimeout(connectSSE, 5000); // reconnect after 5 s
+    };
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  connectSSE();
+  loadHistory("1D");
+</script>
+</body>
+</html>
