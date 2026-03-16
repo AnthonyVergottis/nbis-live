@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NBIS Market Intelligence</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #131722;
+    --card: #1e222d;
+    --border: #2a2e39;
+    --text: #d1d4dc;
+    --muted: #787b86;
+    --green: #26a69a;
+    --red: #ef5350;
+    --blue: #2196f3;
+    --yellow: #ffb74d;
+    --accent: #5b9cf6;
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    background: var(--card);
+  }
+  header h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: 0.02em; }
+  header .subtitle { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+  #refresh-btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 18px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  #refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 16px 24px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; position: relative; overflow: hidden;
+  }
+  .card-title {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 16px;
+  }
+
+  /* Spinner overlay */
+  .overlay {
+    position: absolute; inset: 0; background: rgba(19,23,34,0.85);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-radius: 10px; z-index: 10;
+  }
+  .overlay.hidden { display: none; }
+  .spinner {
+    width: 32px; height: 32px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite; margin-bottom: 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .overlay-msg { font-size: 0.8rem; color: var(--muted); text-align: center; max-width: 200px; }
+
+  /* ── Market Snapshot ── */
+  #nbis-price { font-size: 2.8rem; font-weight: 700; line-height: 1; }
+  #nbis-change { font-size: 1rem; font-weight: 600; margin-top: 4px; margin-bottom: 20px; }
+  .corr-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  }
+  .corr-item {
+    background: var(--bg); border-radius: 6px; padding: 10px 12px;
+  }
+  .corr-sym { font-size: 0.7rem; font-weight: 700; color: var(--muted); }
+  .corr-price { font-size: 0.95rem; font-weight: 600; margin-top: 2px; }
+  .corr-chg { font-size: 0.75rem; font-weight: 500; }
+
+  /* ── Technical Signals ── */
+  .sig-row { margin-bottom: 14px; }
+  .sig-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 5px; display: flex; justify-content: space-between; }
+  .bar-track { background: var(--bg); border-radius: 4px; height: 8px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+  .sig-values { font-size: 0.8rem; margin-top: 4px; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .badge-bull { background: rgba(38,166,154,0.2); color: var(--green); }
+  .badge-bear { background: rgba(239,83,80,0.2); color: var(--red); }
+  .badge-neu  { background: rgba(120,123,134,0.2); color: var(--muted); }
+  .badge-gold { background: rgba(255,183,77,0.2); color: var(--yellow); }
+
+  /* ── News Feed ── */
+  #news-list { max-height: 320px; overflow-y: auto; }
+  .news-item {
+    padding: 10px 12px; border-left: 3px solid var(--border);
+    margin-bottom: 8px; background: var(--bg); border-radius: 0 6px 6px 0;
+  }
+  .news-title { font-size: 0.82rem; line-height: 1.4; }
+  .news-title a { color: var(--text); text-decoration: none; }
+  .news-title a:hover { color: var(--accent); }
+  .news-meta { font-size: 0.68rem; color: var(--muted); margin-top: 4px; }
+
+  /* ── AI Prediction ── */
+  .pred-header {
+    display: flex; align-items: center; gap: 16px; margin-bottom: 16px;
+  }
+  /* Buy / Sell icon */
+  .trade-icon {
+    width: 64px; height: 64px; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 1.6rem; line-height: 1; flex-shrink: 0;
+    border: 3px solid transparent;
+  }
+  .trade-icon .trade-label {
+    font-size: 0.55rem; font-weight: 800; letter-spacing: 0.1em;
+    text-transform: uppercase; margin-top: 2px;
+  }
+  .trade-icon.buy  { background: rgba(38,166,154,0.15); border-color: var(--green); color: var(--green); }
+  .trade-icon.sell { background: rgba(239,83,80,0.15);  border-color: var(--red);   color: var(--red);   }
+  .trade-icon.hold { background: rgba(255,183,77,0.15); border-color: var(--yellow); color: var(--yellow); }
+
+  .pred-meta { flex: 1; }
+  #pred-direction { font-size: 1.4rem; font-weight: 700; text-transform: uppercase; }
+  #pred-horizon   { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+  .conf-bar-wrap  { margin-top: 6px; }
+  .conf-bar-track { background: var(--bg); border-radius: 4px; height: 6px; overflow: hidden; width: 100%; }
+  .conf-bar-fill  { height: 100%; border-radius: 4px; background: var(--accent); transition: width 0.4s; }
+  .conf-label     { font-size: 0.68rem; color: var(--muted); margin-top: 3px; }
+
+  #pred-summary  { font-size: 0.82rem; line-height: 1.6; color: var(--text); margin-bottom: 14px; }
+  .drivers-risks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+  .dr-col h4     { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .dr-col ul     { list-style: none; }
+  .dr-col ul li  { font-size: 0.76rem; line-height: 1.5; padding-left: 14px; position: relative; }
+  .dr-col ul li::before { content: "•"; position: absolute; left: 0; }
+  .drivers li::before { color: var(--green); }
+  .risks    li::before { color: var(--red); }
+
+  .price-targets { display: flex; gap: 12px; margin-bottom: 14px; }
+  .pt-box { flex: 1; background: var(--bg); border-radius: 6px; padding: 10px 14px; text-align: center; }
+  .pt-box .pt-label { font-size: 0.65rem; color: var(--muted); }
+  .pt-box .pt-val   { font-size: 1.1rem; font-weight: 700; margin-top: 2px; }
+
+  .sub-biases { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .neu { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>NBIS Market Intelligence</h1>
+    <div class="subtitle">Real-time data · AI-powered analysis</div>
+  </div>
+  <button id="refresh-btn" onclick="startRefresh()">Refresh Analysis</button>
+</header>
+
+<div class="grid">
+
+  <!-- ── Panel 1: Market Snapshot ── -->
+  <div class="card" id="card-snapshot">
+    <div class="overlay hidden" id="overlay-snapshot">
+      <div class="spinner"></div>
+      <div class="overlay-msg" id="progress-msg">Gathering data…</div>
+    </div>
+    <div class="card-title">Market Snapshot</div>
+    <div id="nbis-price">—</div>
+    <div id="nbis-change" class="neu">—</div>
+    <div class="corr-grid" id="corr-grid"></div>
+  </div>
+
+  <!-- ── Panel 2: Technical Signals ── -->
+  <div class="card" id="card-tech">
+    <div class="overlay hidden" id="overlay-tech">
+      <div class="spinner"></div>
+    </div>
+    <div class="card-title">Technical Signals</div>
+
+    <div class="sig-row">
+      <div class="sig-label"><span>RSI (14)</span><span id="rsi-val">—</span></div>
+      <div class="bar-track"><div class="bar-fill" id="rsi-bar" style="width:50%;background:#787b86"></div></div>
+      <div class="sig-values" id="rsi-sig">—</div>
+    </div>
+
+    <div class="sig-row">
+      <div class="sig-label"><span>MACD</span><span id="macd-cross-badge"></span></div>
+      <div class="sig-values" id="macd-vals">—</div>
+    </div>
+
+    <div class="sig-row">
+      <div class="sig-label"><span>Bollinger %B</span><span id="bb-val">—</span></div>
+      <div class="bar-track"><div class="bar-fill" id="bb-bar" style="width:50%;background:#787b86"></div></div>
+      <div class="sig-values" id="bb-pos">—</div>
+    </div>
+
+    <div class="sig-row">
+      <div class="sig-label"><span>Moving Averages</span></div>
+      <div class="sig-values" id="ma-vals">—</div>
+      <div style="margin-top:4px" id="ma-cross-badge"></div>
+    </div>
+
+    <div class="sig-row">
+      <div class="sig-label"><span>Volume Ratio (vs 20d avg)</span><span id="vol-ratio">—</span></div>
+      <div class="bar-track"><div class="bar-fill" id="vol-bar" style="width:50%;background:#787b86"></div></div>
+    </div>
+  </div>
+
+  <!-- ── Panel 3: News Feed ── -->
+  <div class="card" id="card-news">
+    <div class="overlay hidden" id="overlay-news">
+      <div class="spinner"></div>
+    </div>
+    <div class="card-title">News Feed</div>
+    <div id="news-list"><div style="color:var(--muted);font-size:0.8rem">No data yet. Click Refresh Analysis.</div></div>
+  </div>
+
+  <!-- ── Panel 4: AI Prediction ── -->
+  <div class="card" id="card-pred">
+    <div class="overlay hidden" id="overlay-pred">
+      <div class="spinner"></div>
+    </div>
+    <div class="card-title">AI Prediction</div>
+
+    <div class="pred-header">
+      <div class="trade-icon hold" id="trade-icon">
+        <span id="trade-icon-glyph">⏸</span>
+        <span class="trade-label" id="trade-icon-label">HOLD</span>
+      </div>
+      <div class="pred-meta">
+        <div id="pred-direction" class="neu">Awaiting analysis</div>
+        <div id="pred-horizon"></div>
+        <div class="conf-bar-wrap">
+          <div class="conf-bar-track"><div class="conf-bar-fill" id="conf-bar" style="width:0%"></div></div>
+          <div class="conf-label" id="conf-label">Confidence: —</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="pred-summary" style="color:var(--muted);font-size:0.8rem">Run an analysis to see the AI prediction.</div>
+
+    <div class="drivers-risks" id="drivers-risks" style="display:none">
+      <div class="dr-col drivers">
+        <h4>Key Drivers</h4>
+        <ul id="drivers-list"></ul>
+      </div>
+      <div class="dr-col risks">
+        <h4>Risk Factors</h4>
+        <ul id="risks-list"></ul>
+      </div>
+    </div>
+
+    <div class="price-targets" id="price-targets" style="display:none">
+      <div class="pt-box">
+        <div class="pt-label">Target Low</div>
+        <div class="pt-val" id="pt-low">—</div>
+      </div>
+      <div class="pt-box">
+        <div class="pt-label">Target High</div>
+        <div class="pt-val" id="pt-high">—</div>
+      </div>
+    </div>
+
+    <div class="sub-biases" id="sub-biases"></div>
+  </div>
+
+</div>
+
+<script>
+const OVERLAYS = ['snapshot','tech','news','pred'];
+
+function showOverlays() {
+  OVERLAYS.forEach(id => document.getElementById('overlay-'+id).classList.remove('hidden'));
+}
+function hideOverlays() {
+  OVERLAYS.forEach(id => document.getElementById('overlay-'+id).classList.add('hidden'));
+}
+
+function setProgress(msg) {
+  const el = document.getElementById('progress-msg');
+  if (el) el.textContent = msg;
+}
+
+function startRefresh() {
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = true;
+  showOverlays();
+  setProgress('Starting analysis…');
+
+  fetch('/api/refresh', { method: 'POST' })
+    .then(r => r.json())
+    .then(body => {
+      if (body.status === 'ready') {
+        renderData(body.data);
+        hideOverlays();
+        btn.disabled = false;
+      } else if (body.status === 'started' || body.status === 'running') {
+        listenSSE();
+      } else {
+        hideOverlays();
+        btn.disabled = false;
+        alert('Error: ' + (body.message || 'unknown'));
+      }
+    })
+    .catch(e => { hideOverlays(); btn.disabled = false; console.error(e); });
+}
+
+function listenSSE() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = e => {
+    try { const d = JSON.parse(e.data); if (d.message) setProgress(d.message); } catch(_) {}
+  };
+  es.addEventListener('done', () => {
+    es.close();
+    fetch('/api/latest')
+      .then(r => r.json())
+      .then(body => {
+        if (body.data) renderData(body.data);
+        hideOverlays();
+        document.getElementById('refresh-btn').disabled = false;
+      });
+  });
+  es.onerror = () => {
+    es.close();
+    hideOverlays();
+    document.getElementById('refresh-btn').disabled = false;
+  };
+}
+
+// ── Renderers ──────────────────────────────────────────────────────────────
+
+function fmtChange(pct) {
+  if (pct == null) return '—';
+  const sign = pct >= 0 ? '+' : '';
+  return sign + pct.toFixed(2) + '%';
+}
+function colorClass(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu'; }
+function dirClass(d) {
+  if (!d) return 'neu';
+  d = d.toLowerCase();
+  if (d === 'bullish') return 'pos';
+  if (d === 'bearish') return 'neg';
+  return 'neu';
+}
+
+function renderSnapshot(nbis, corr) {
+  const price = nbis.price != null ? '$' + nbis.price.toFixed(2) : '—';
+  document.getElementById('nbis-price').textContent = price;
+  const chgEl = document.getElementById('nbis-change');
+  const chg = nbis.change_pct;
+  chgEl.textContent = fmtChange(chg);
+  chgEl.className = colorClass(chg);
+
+  const grid = document.getElementById('corr-grid');
+  grid.innerHTML = '';
+  const order = ['NVDA','SMCI','CRWV','SPY','QQQ','VIX'];
+  order.forEach(sym => {
+    const v = corr[sym] || corr['^'+sym];
+    if (!v || !v.price) return;
+    const div = document.createElement('div');
+    div.className = 'corr-item';
+    div.innerHTML = `
+      <div class="corr-sym">${sym}</div>
+      <div class="corr-price">$${v.price.toFixed(2)}</div>
+      <div class="corr-chg ${colorClass(v.change_pct)}">${fmtChange(v.change_pct)}</div>`;
+    grid.appendChild(div);
+  });
+}
+
+function renderTech(nbis) {
+  // RSI
+  const rsi = nbis.rsi_14;
+  document.getElementById('rsi-val').textContent = rsi != null ? rsi.toFixed(1) : '—';
+  const rsiBar = document.getElementById('rsi-bar');
+  rsiBar.style.width = (rsi != null ? Math.min(rsi, 100) : 50) + '%';
+  rsiBar.style.background = rsi > 70 ? 'var(--red)' : rsi < 30 ? 'var(--green)' : 'var(--accent)';
+  document.getElementById('rsi-sig').innerHTML = `<span class="badge ${rsi>70?'badge-bear':rsi<30?'badge-bull':'badge-neu'}">${nbis.rsi_signal||'—'}</span>`;
+
+  // MACD
+  const cross = nbis.macd_cross || 'none';
+  const crossBadge = cross === 'bullish' ? '<span class="badge badge-bull">Bullish Cross</span>'
+                   : cross === 'bearish' ? '<span class="badge badge-bear">Bearish Cross</span>'
+                   : '';
+  document.getElementById('macd-cross-badge').innerHTML = crossBadge;
+  document.getElementById('macd-vals').textContent =
+    `MACD: ${nbis.macd_value?.toFixed(3)||'—'}  Signal: ${nbis.macd_signal?.toFixed(3)||'—'}  Hist: ${nbis.macd_histogram?.toFixed(3)||'—'}`;
+
+  // Bollinger
+  const bb = nbis.bb_pct_b;
+  document.getElementById('bb-val').textContent = bb != null ? bb.toFixed(2) : '—';
+  const bbBar = document.getElementById('bb-bar');
+  bbBar.style.width = (bb != null ? Math.max(0, Math.min(bb * 100, 100)) : 50) + '%';
+  bbBar.style.background = bb > 0.8 ? 'var(--red)' : bb < 0.2 ? 'var(--green)' : 'var(--accent)';
+  document.getElementById('bb-pos').innerHTML = `<span class="badge ${nbis.bb_position==='overbought'?'badge-bear':nbis.bb_position==='oversold'?'badge-bull':'badge-neu'}">${nbis.bb_position||'—'}</span>`;
+
+  // MA
+  document.getElementById('ma-vals').textContent =
+    `MA20: ${nbis.ma_20?.toFixed(2)||'—'} (${nbis.price_vs_ma20!=null?(nbis.price_vs_ma20>0?'+':'')+nbis.price_vs_ma20+'%':'—'})  ` +
+    `MA50: ${nbis.ma_50?.toFixed(2)||'—'} (${nbis.price_vs_ma50!=null?(nbis.price_vs_ma50>0?'+':'')+nbis.price_vs_ma50+'%':'—'})`;
+  const maCross = nbis.ma_cross || 'none';
+  document.getElementById('ma-cross-badge').innerHTML = maCross === 'golden'
+    ? '<span class="badge badge-gold">Golden Cross</span>'
+    : maCross === 'death' ? '<span class="badge badge-bear">Death Cross</span>' : '';
+
+  // Volume
+  const vol = nbis.volume_ratio;
+  document.getElementById('vol-ratio').textContent = vol != null ? vol + 'x' : '—';
+  const volBar = document.getElementById('vol-bar');
+  volBar.style.width = Math.min((vol || 1) / 3 * 100, 100) + '%';
+  volBar.style.background = vol > 1.5 ? 'var(--yellow)' : 'var(--accent)';
+}
+
+function renderNews(news) {
+  const list = document.getElementById('news-list');
+  const all = [...(news.nbis_headlines||[]).map(h=>({...h,_tag:'NBIS'})),
+               ...(news.nvda_headlines||[]).map(h=>({...h,_tag:'NVDA'}))];
+  all.sort((a,b) => (b.published_at||0) - (a.published_at||0));
+
+  if (!all.length) { list.innerHTML = '<div style="color:var(--muted);font-size:0.8rem">No headlines found.</div>'; return; }
+
+  list.innerHTML = all.map(h => {
+    const score = h.sentiment_score || 0;
+    const border = score > 0.1 ? 'var(--green)' : score < -0.1 ? 'var(--red)' : 'var(--border)';
+    const age = h.published_at ? timeAgo(h.published_at) : '';
+    const titleEl = h.url
+      ? `<a href="${h.url}" target="_blank" rel="noopener">${escHtml(h.title||'')}</a>`
+      : escHtml(h.title||'');
+    return `<div class="news-item" style="border-left-color:${border}">
+      <div class="news-title">${titleEl}</div>
+      <div class="news-meta">${escHtml(h.publisher||'')}${age?' · '+age:''} · <span class="badge-tag">${h._tag}</span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderPrediction(pred) {
+  if (!pred) return;
+  const dir = (pred.direction || 'neutral').toLowerCase();
+
+  // Direction text
+  const dirEl = document.getElementById('pred-direction');
+  dirEl.textContent = (pred.direction || 'Neutral').charAt(0).toUpperCase() + (pred.direction||'neutral').slice(1);
+  dirEl.className = dirClass(dir);
+
+  // ── Buy / Sell / Hold icon ──
+  const icon = document.getElementById('trade-icon');
+  const glyph = document.getElementById('trade-icon-glyph');
+  const label = document.getElementById('trade-icon-label');
+  const conf = pred.confidence || 0;
+
+  if (dir === 'bullish' && conf >= 55) {
+    icon.className = 'trade-icon buy';
+    glyph.textContent = '↑';
+    label.textContent = 'BUY';
+  } else if (dir === 'bearish' && conf >= 55) {
+    icon.className = 'trade-icon sell';
+    glyph.textContent = '↓';
+    label.textContent = 'SELL';
+  } else {
+    icon.className = 'trade-icon hold';
+    glyph.textContent = '⏸';
+    label.textContent = 'HOLD';
+  }
+
+  // Horizon + confidence
+  if (pred.time_horizon_days) {
+    document.getElementById('pred-horizon').textContent = `${pred.time_horizon_days}-day outlook`;
+  }
+  const confBar = document.getElementById('conf-bar');
+  confBar.style.width = conf + '%';
+  confBar.style.background = conf >= 70 ? 'var(--green)' : conf >= 40 ? 'var(--accent)' : 'var(--red)';
+  document.getElementById('conf-label').textContent = `Confidence: ${conf}%`;
+
+  // Summary
+  document.getElementById('pred-summary').textContent = pred.summary || '';
+
+  // Drivers / risks
+  const dr = document.getElementById('drivers-risks');
+  const dList = document.getElementById('drivers-list');
+  const rList = document.getElementById('risks-list');
+  dList.innerHTML = (pred.key_drivers||[]).map(d=>`<li>${escHtml(d)}</li>`).join('');
+  rList.innerHTML = (pred.risk_factors||[]).map(r=>`<li>${escHtml(r)}</li>`).join('');
+  dr.style.display = '';
+
+  // Price targets
+  const ptSection = document.getElementById('price-targets');
+  if (pred.price_target_low != null) {
+    document.getElementById('pt-low').textContent = '$' + Number(pred.price_target_low).toFixed(2);
+    document.getElementById('pt-high').textContent = '$' + Number(pred.price_target_high).toFixed(2);
+    ptSection.style.display = '';
+  }
+
+  // Sub-biases
+  const biases = document.getElementById('sub-biases');
+  biases.innerHTML = [
+    { label: 'Technical', val: pred.technical_bias },
+    { label: 'Sentiment', val: pred.sentiment_bias },
+    { label: 'Sector',    val: pred.sector_bias },
+  ].filter(b=>b.val).map(b => {
+    const cls = b.val==='bullish'?'badge-bull':b.val==='bearish'?'badge-bear':'badge-neu';
+    return `<span class="badge ${cls}">${b.label}: ${b.val}</span>`;
+  }).join('');
+}
+
+function renderData(d) {
+  if (!d) return;
+  if (d.nbis)        renderSnapshot(d.nbis, d.correlated || {});
+  if (d.nbis)        renderTech(d.nbis);
+  if (d.news)        renderNews(d.news);
+  if (d.prediction)  renderPrediction(d.prediction);
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function timeAgo(ts) {
+  const diff = Math.floor(Date.now() / 1000 - ts);
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+// ── Auto-refresh every 5 minutes ──────────────────────────────────────────
+
+setInterval(() => {
+  fetch('/api/latest')
+    .then(r => r.json())
+    .then(body => {
+      if (body.status === 'running') return; // don't interrupt in-progress
+      startRefresh();
+    });
+}, 5 * 60 * 1000);
+
+// Load existing cache on page open
+fetch('/api/latest')
+  .then(r => r.json())
+  .then(body => { if (body.data) renderData(body.data); });
+</script>
+</body>
+</html>
