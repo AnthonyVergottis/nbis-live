@@ -106,6 +106,9 @@
   .news-title a { color: var(--text); text-decoration: none; }
   .news-title a:hover { color: var(--accent); }
   .news-meta { font-size: 0.68rem; color: var(--muted); margin-top: 4px; }
+  .tag-NBIS   { color: var(--accent); font-weight: 700; }
+  .tag-NVDA   { color: var(--yellow); font-weight: 700; }
+  .tag-SECTOR { color: var(--muted);  font-weight: 700; }
 
   /* ── AI Prediction ── */
   .pred-header {
@@ -422,7 +425,8 @@ function renderTech(nbis) {
 function renderNews(news) {
   const list = document.getElementById('news-list');
   const all = [...(news.nbis_headlines||[]).map(h=>({...h,_tag:'NBIS'})),
-               ...(news.nvda_headlines||[]).map(h=>({...h,_tag:'NVDA'}))];
+               ...(news.nvda_headlines||[]).map(h=>({...h,_tag:'NVDA'})),
+               ...(news.sector_headlines||[]).map(h=>({...h,_tag:'SECTOR'}))];
   all.sort((a,b) => (b.published_at||0) - (a.published_at||0));
 
   if (!all.length) { list.innerHTML = '<div style="color:var(--muted);font-size:0.8rem">No headlines found.</div>'; return; }
@@ -436,7 +440,7 @@ function renderNews(news) {
       : escHtml(h.title||'');
     return `<div class="news-item" style="border-left-color:${border}">
       <div class="news-title">${titleEl}</div>
-      <div class="news-meta">${escHtml(h.publisher||'')}${age?' · '+age:''} · <span class="badge-tag">${h._tag}</span></div>
+      <div class="news-meta">${escHtml(h.publisher||'')}${age?' · '+age:''} · <span class="tag-${h._tag}">${h._tag}</span></div>
     </div>`;
   }).join('');
 }

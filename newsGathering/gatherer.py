@@ -4,9 +4,19 @@ gatherer.py — collects NBIS market intelligence from yfinance
 
 import time
 import concurrent.futures
+import urllib.request
+import xml.etree.ElementTree as ET
+import html
+import re as _re
 import yfinance as yf
 import numpy as np
 import pandas as pd
+
+_RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+_RSS_TIMEOUT = 8  # seconds
 
 
 # ---------------------------------------------------------------------------
@@ -215,48 +225,179 @@ def _score_headline(title: str) -> float:
     return round((pos - neg) / (pos + neg), 2)
 
 
-def _fetch_news() -> dict:
-    def _get_headlines(symbol: str, limit: int = 10):
-        try:
-            ticker = yf.Ticker(symbol)
-            items = ticker.news or []
-            headlines = []
-            for item in items[:limit]:
-                title = item.get("title", "")
-                link = item.get("link", "") or item.get("url", "")
-                publisher = item.get("publisher", "") or item.get("source", {}).get("name", "") if isinstance(item.get("source"), dict) else item.get("publisher", "")
-                pub_time = item.get("providerPublishTime") or item.get("pubDate") or item.get("timestamp", 0)
+def _rss_fetch(url: str, publisher_fallback: str = "", limit: int = 15) -> list:
+    """Fetch and parse an RSS feed, returning a list of headline dicts."""
+    try:
+        req = urllib.request.Request(url, headers=_RSS_HEADERS)
+        with urllib.request.urlopen(req, timeout=_RSS_TIMEOUT) as resp:
+            raw = resp.read()
+        root = ET.fromstring(raw)
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+        results = []
+        for item in items[:limit]:
+            def _t(tag):
+                el = item.find(tag)
+                return html.unescape(el.text.strip()) if el is not None and el.text else ""
+            title = _t("title") or _t("atom:title")
+            link  = _t("link")  or _t("atom:link") or (item.find("atom:link", ns).get("href","") if item.find("atom:link", ns) is not None else "")
+            pub   = _t("pubDate") or _t("published") or _t("atom:published")
+            source_el = item.find("source")
+            publisher = (source_el.text.strip() if source_el is not None and source_el.text else "") or publisher_fallback
+            # Parse pub date to unix timestamp
+            pub_ts = 0
+            if pub:
                 try:
-                    pub_time = int(pub_time)
-                except (TypeError, ValueError):
-                    pub_time = 0
-                score = _score_headline(title)
-                headlines.append({
+                    from email.utils import parsedate_to_datetime
+                    pub_ts = int(parsedate_to_datetime(pub).timestamp())
+                except Exception:
+                    try:
+                        from datetime import datetime, timezone
+                        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z"):
+                            try:
+                                pub_ts = int(datetime.strptime(pub[:25], fmt).replace(tzinfo=timezone.utc).timestamp())
+                                break
+                            except ValueError:
+                                continue
+                    except Exception:
+                        pub_ts = 0
+            if title:
+                results.append({
                     "title": title,
                     "publisher": publisher,
                     "url": link,
-                    "published_at": pub_time,
-                    "sentiment_score": score,
+                    "published_at": pub_ts,
+                    "sentiment_score": _score_headline(title),
                 })
-            return headlines
-        except Exception as e:
-            return [{"error": str(e)}]
+        return results
+    except Exception:
+        return []
 
-    nbis_headlines = _get_headlines("NBIS")
-    nvda_headlines = _get_headlines("NVDA")
 
-    nbis_scores = [h["sentiment_score"] for h in nbis_headlines if "sentiment_score" in h]
-    nvda_scores = [h["sentiment_score"] for h in nvda_headlines if "sentiment_score" in h]
-    nbis_avg = round(sum(nbis_scores) / len(nbis_scores), 2) if nbis_scores else 0.0
-    nvda_avg = round(sum(nvda_scores) / len(nvda_scores), 2) if nvda_scores else 0.0
-    overall = round((nbis_avg + nvda_avg) / 2, 2)
+def _finviz_news(symbol: str, limit: int = 10) -> list:
+    """Scrape Finviz news table for a ticker (no API key required)."""
+    try:
+        url = f"https://finviz.com/quote.ashx?t={symbol}&p=d"
+        req = urllib.request.Request(url, headers={**_RSS_HEADERS, "Referer": "https://finviz.com/"})
+        with urllib.request.urlopen(req, timeout=_RSS_TIMEOUT) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+        # Extract rows from the news table
+        pattern = _re.compile(
+            r'class="news-link-left[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)</a>.*?'
+            r'<span[^>]*>([^<]+)</span>',
+            _re.DOTALL
+        )
+        results = []
+        for m in pattern.finditer(body):
+            url_val, title, publisher = m.group(1), m.group(2).strip(), m.group(3).strip()
+            title = html.unescape(title)
+            results.append({
+                "title": title,
+                "publisher": publisher,
+                "url": url_val,
+                "published_at": 0,
+                "sentiment_score": _score_headline(title),
+            })
+            if len(results) >= limit:
+                break
+        return results
+    except Exception:
+        return []
+
+
+def _yf_news(symbol: str, limit: int = 10) -> list:
+    """Pull news from yfinance (Yahoo Finance internal API)."""
+    try:
+        ticker = yf.Ticker(symbol)
+        items = ticker.news or []
+        results = []
+        for item in items[:limit]:
+            title = item.get("title", "")
+            link = item.get("link", "") or item.get("url", "")
+            publisher = item.get("publisher", "")
+            if not publisher and isinstance(item.get("source"), dict):
+                publisher = item["source"].get("name", "")
+            pub_time = item.get("providerPublishTime") or item.get("pubDate") or item.get("timestamp", 0)
+            try:
+                pub_time = int(pub_time)
+            except (TypeError, ValueError):
+                pub_time = 0
+            if title:
+                results.append({
+                    "title": title,
+                    "publisher": publisher or "Yahoo Finance",
+                    "url": link,
+                    "published_at": pub_time,
+                    "sentiment_score": _score_headline(title),
+                })
+        return results
+    except Exception:
+        return []
+
+
+def _dedupe(headlines: list) -> list:
+    """Remove duplicate headlines by normalised title."""
+    seen, out = set(), []
+    for h in headlines:
+        key = _re.sub(r"[^a-z0-9]", "", h.get("title", "").lower())[:60]
+        if key and key not in seen:
+            seen.add(key)
+            out.append(h)
+    return out
+
+
+def _fetch_news() -> dict:
+    YF_RSS_NBIS  = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=NBIS&region=US&lang=en-US"
+    YF_RSS_NVDA  = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=NVDA&region=US&lang=en-US"
+    GNEWS_NBIS   = "https://news.google.com/rss/search?q=Nebius+NBIS+stock&hl=en-US&gl=US&ceid=US:en"
+    GNEWS_NVDA   = "https://news.google.com/rss/search?q=NVDA+Nvidia+AI+chips&hl=en-US&gl=US&ceid=US:en"
+    GNEWS_AI     = "https://news.google.com/rss/search?q=AI+chips+semiconductor+GPU&hl=en-US&gl=US&ceid=US:en"
+    REUTERS_TECH = "https://feeds.reuters.com/reuters/technologyNews"
+    MARKETWATCH  = "https://feeds.marketwatch.com/marketwatch/topstories/"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {
+            "yf_nbis":   ex.submit(_yf_news, "NBIS", 10),
+            "yf_nvda":   ex.submit(_yf_news, "NVDA", 10),
+            "rss_nbis":  ex.submit(_rss_fetch, YF_RSS_NBIS, "Yahoo Finance", 15),
+            "rss_nvda":  ex.submit(_rss_fetch, YF_RSS_NVDA, "Yahoo Finance", 15),
+            "g_nbis":    ex.submit(_rss_fetch, GNEWS_NBIS,  "Google News",   15),
+            "g_nvda":    ex.submit(_rss_fetch, GNEWS_NVDA,  "Google News",   15),
+            "g_ai":      ex.submit(_rss_fetch, GNEWS_AI,    "Google News",   10),
+            "reuters":   ex.submit(_rss_fetch, REUTERS_TECH,"Reuters",       10),
+            "mw":        ex.submit(_rss_fetch, MARKETWATCH, "MarketWatch",   10),
+            "fviz_nbis": ex.submit(_finviz_news, "NBIS", 10),
+            "fviz_nvda": ex.submit(_finviz_news, "NVDA", 10),
+        }
+        results = {k: f.result() for k, f in futs.items()}
+
+    nbis_raw = (results["yf_nbis"] + results["rss_nbis"] +
+                results["g_nbis"] + results["fviz_nbis"])
+    nvda_raw = (results["yf_nvda"] + results["rss_nvda"] +
+                results["g_nvda"] + results["fviz_nvda"])
+    sector_raw = results["g_ai"] + results["reuters"] + results["mw"]
+
+    nbis_headlines = sorted(_dedupe(nbis_raw), key=lambda h: h["published_at"], reverse=True)[:15]
+    nvda_headlines = sorted(_dedupe(nvda_raw), key=lambda h: h["published_at"], reverse=True)[:15]
+    sector_headlines = sorted(_dedupe(sector_raw), key=lambda h: h["published_at"], reverse=True)[:10]
+
+    def _avg(items):
+        scores = [h["sentiment_score"] for h in items if "sentiment_score" in h]
+        return round(sum(scores) / len(scores), 2) if scores else 0.0
+
+    nbis_avg   = _avg(nbis_headlines)
+    nvda_avg   = _avg(nvda_headlines)
+    sector_avg = _avg(sector_headlines)
+    overall    = round((nbis_avg + nvda_avg + sector_avg) / 3, 2)
 
     return {
-        "nbis_headlines": nbis_headlines,
-        "nvda_headlines": nvda_headlines,
-        "nbis_sentiment_avg": nbis_avg,
-        "nvda_sentiment_avg": nvda_avg,
-        "overall_sentiment": overall,
+        "nbis_headlines":    nbis_headlines,
+        "nvda_headlines":    nvda_headlines,
+        "sector_headlines":  sector_headlines,
+        "nbis_sentiment_avg":   nbis_avg,
+        "nvda_sentiment_avg":   nvda_avg,
+        "sector_sentiment_avg": sector_avg,
+        "overall_sentiment":    overall,
     }
 
 

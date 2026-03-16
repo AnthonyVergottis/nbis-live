@@ -24,8 +24,9 @@ def _build_prompt(data: dict) -> str:
     opts = data.get("options", {})
     news = data.get("news", {})
 
-    nbis_headlines = news.get("nbis_headlines", [])[:5]
-    nvda_headlines = news.get("nvda_headlines", [])[:3]
+    nbis_headlines   = news.get("nbis_headlines", [])[:5]
+    nvda_headlines   = news.get("nvda_headlines", [])[:3]
+    sector_headlines = news.get("sector_headlines", [])[:3]
 
     headline_text = "\n".join(
         f"  - [{h.get('publisher','')}] {h.get('title','')} (sentiment: {h.get('sentiment_score',0)})"
@@ -34,6 +35,10 @@ def _build_prompt(data: dict) -> str:
     nvda_headline_text = "\n".join(
         f"  - [{h.get('publisher','')}] {h.get('title','')} (sentiment: {h.get('sentiment_score',0)})"
         for h in nvda_headlines if "title" in h
+    )
+    sector_headline_text = "\n".join(
+        f"  - [{h.get('publisher','')}] {h.get('title','')} (sentiment: {h.get('sentiment_score',0)})"
+        for h in sector_headlines if "title" in h
     )
 
     corr_text = "\n".join(
@@ -72,7 +77,10 @@ NBIS headlines:
 NVDA headlines:
 {nvda_headline_text}
 
-Overall sentiment: NBIS avg={news.get('nbis_sentiment_avg')}, NVDA avg={news.get('nvda_sentiment_avg')}, combined={news.get('overall_sentiment')}
+Sector / macro headlines (Reuters, MarketWatch, Google News):
+{sector_headline_text}
+
+Overall sentiment: NBIS avg={news.get('nbis_sentiment_avg')}, NVDA avg={news.get('nvda_sentiment_avg')}, sector avg={news.get('sector_sentiment_avg')}, combined={news.get('overall_sentiment')}
 
 ## Instructions
 Analyze all of the above and return ONLY a JSON object with exactly these fields:
